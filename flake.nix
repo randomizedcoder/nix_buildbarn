@@ -14,8 +14,8 @@
   description = "A Nix flake to build buildbarn";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
-    #nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    #nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -32,7 +32,8 @@
         #commonLdflags = [ "-s" "-w" "-X main.version=${appVersion}" "-X main.commit=nix-build" "-X main.date=unknown" ];
         commonLdflags = [ "-s" "-w" ];
         # Common buildFlags for Go builds
-        commonBuildFlags = [ "-tags=netgo,osusergo" "-trimpath" ];
+        #commonBuildFlags = [ "-tags=netgo,osusergo" "-trimpath" ];
+        commonTags = [ "netgo" "osusergo" ];
 
         # --- Base Binary Derivations ---
 
@@ -40,23 +41,25 @@
           pname = "bbRunner";
           version = appVersion;
 
-          src = fetchFromGitHub {
+          src = pkgs.fetchFromGitHub {
             owner = "buildbarn";
             repo = "bb-remote-execution";
             #rev = "master";
             rev = "1c726bdc27e7793c685d8788913f8f91f59bc887"; # repo doesn't have tags?  using commit from 2025 May 3rd
-            hash = pkgs.lib.fakeSha256;
-            #hash = "";
+            #hash = pkgs.lib.fakeSha256;
+            hash = "sha256-TBkIWE3A/GN6IDTp1/7Y2wCAX21j//1+DZNESum8L2M=";
           };
           subPackages = [ "cmd/bb_runner" ];
           # Ensure this hash is updated when go.mod/go.sum changes
           # Run: nix build .#bbRunner --rebuild
-          vendorHash = pkgs.lib.fakeSha256;
+          #vendorHash = pkgs.lib.fakeSha256; # I don't know why this doesn't work
           #vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-          #vendorHash = "sha256-iMUa+OE/Ecb3TDw4PmvRfujo++T/r4g/pW0ZT63zIC4=";
+          vendorHash = "sha256-3ppaT3biRIPBe3ZQgheuFs19fBrR57T0vwwBMU0CTqM=";
           ldflags = commonLdflags;
-          buildFlags = commonBuildFlags;
-          env = { CGO_ENABLED = 0; };
+          #buildFlags = commonBuildFlags;
+          #env = { CGO_ENABLED = 0; };
+          tags = commonTags;
+          enableCgo = false;
         };
 
         # --- UPX Packed Binary Derivations ---
@@ -66,11 +69,14 @@
           src = bbRunner;
         } ''
           mkdir -p $out/bin
-          local orig_bin="$src/bin/bbRunner"
+          # The binary name comes from the subPackages entry 'cmd/bb_runner'
+          local input_binary_name="bb_runner"
+          local output_binary_name="bbRunner"
+          local orig_bin="$src/bin/$input_binary_name"
           echo "Original size ($(basename $orig_bin)): $(ls -lh $orig_bin | awk '{print $5}')"
-          upx --best --lzma -o $out/bin/bbRunner "$orig_bin"
-          echo "Compressed size ($(basename $out/bin/bbRunner)): $(ls -lh $out/bin/bbRunner | awk '{print $5}')"
-          chmod +x $out/bin/bbRunner
+          upx --best --lzma -o "$out/bin/$output_binary_name" "$orig_bin"
+          echo "Compressed size ($(basename $out/bin/$output_binary_name)): $(ls -lh $out/bin/$output_binary_name | awk '{print $5}')"
+          chmod +x "$out/bin/$output_binary_name"
         '';
 
         etcFiles = pkgs.runCommand "etc-files" {} ''

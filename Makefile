@@ -1,0 +1,130 @@
+#
+# Makefile
+#
+# Makefile for nix_buildbarn flake
+
+# --- Variables ---
+# Get the system architecture Nix is using (e.g., x86_64-linux)
+SYSTEM ?= $(shell nix eval --raw nixpkgs#system)
+
+REPO_PREFIX := randomizedcoder
+VERSION := $(shell cat VERSION)
+
+NOUPX_BINARY_PKG := binary-bbRunner-noupx
+UPX_BINARY_PKG := binary-bbRunner-upx
+NOUPX_IMAGE_PKG := image-nix-scratch-bbRunner-noupx
+UPX_IMAGE_PKG := image-nix-scratch-bbRunner-upx
+
+NOUPX_IMAGE_NAME := nix-bbrunner-noupx
+UPX_IMAGE_NAME := nix-bbrunner-upx
+
+# # Define the target local registry (override with `make push-all LOCAL_REGISTRY=myregistry:port`)
+# LOCAL_REGISTRY ?= localhost:5000
+
+RESULT_NOUPX_BINARY := result-binary-noupx
+RESULT_UPX_BINARY := result-binary-upx
+RESULT_NOUPX_IMAGE := result-image-noupx.tar.gz
+RESULT_UPX_IMAGE := result-image-upx.tar.gz
+
+# --- Phony Targets ---
+.PHONY: all build-all load-all build-load-all \
+        push-all push-image-scratch-noupx push-image-scratch-upx \
+        build-binary-noupx build-binary-upx \
+        build-image-scratch-noupx build-image-scratch-upx \
+        load-image-scratch-noupx load-image-scratch-upx \
+        clean help
+
+all: help
+
+help:
+	@echo "Usage: make [TARGET]"
+	@echo ""
+	@echo "Available targets:"
+	@echo "  build-binary-noupx           Build the non-UPX binary (${NOUPX_BINARY_PKG})"
+	@echo "  build-binary-upx             Build the UPX-packed binary (${UPX_BINARY_PKG})"
+	@echo "  build-image-scratch-noupx    Build the non-UPX scratch container image (${NOUPX_IMAGE_PKG})"
+	@echo "  build-image-scratch-upx      Build the UPX-packed scratch container image (${UPX_IMAGE_PKG})"
+	@echo "  load-image-scratch-upx       Build and load UPX image into local Docker daemon, and show info"
+	@echo "  build-all                    Build both container images"
+	@echo "  load-all                     Load both container images into local Docker daemon"
+	@echo "  push-image-scratch-noupx     Push the non-UPX image to Docker Hub (${REPO_PREFIX}/${NOUPX_IMAGE_NAME})"
+	@echo "  push-image-scratch-upx       Push the UPX image to Docker Hub (${REPO_PREFIX}/${UPX_IMAGE_NAME})"
+	@echo "  push-all                     Push both images to Docker Hub"
+	@echo "  build-load-all               Build and load both container images into local Docker daemon"
+	@echo "  clean                        Remove Nix build result symlinks (result-*)"
+	@echo "  help                         Show this help message"
+	@echo ""
+
+# --- Build Targets ---
+build-binary-noupx:
+	@echo "--> Building non-UPX binary..."
+	nix build ".#${NOUPX_BINARY_PKG}" -o "${RESULT_NOUPX_BINARY}"
+
+build-binary-upx:
+	@echo "--> Building UPX binary..."
+	nix build ".#${UPX_BINARY_PKG}" -o "${RESULT_UPX_BINARY}"
+
+build-image-scratch-noupx: ${RESULT_NOUPX_IMAGE}
+${RESULT_NOUPX_IMAGE}: flake.nix flake.lock VERSION
+	@echo "--> Building non-UPX scratch image..."
+	nix build ".#${NOUPX_IMAGE_PKG}" -o "${RESULT_NOUPX_IMAGE}"
+
+build-image-scratch-upx: ${RESULT_UPX_IMAGE}
+${RESULT_UPX_IMAGE}: flake.nix flake.lock VERSION
+	@echo "--> Building UPX scratch image..."
+	nix build ".#${UPX_IMAGE_PKG}" -o "${RESULT_UPX_IMAGE}"
+
+build-all: build-image-scratch-noupx build-image-scratch-upx
+
+# --- Load & Info Targets ---
+load-image-scratch-noupx: ${RESULT_NOUPX_IMAGE}
+	@echo "--> Loading and getting info for non-UPX image (${REPO_PREFIX}/${NOUPX_IMAGE_NAME}:latest)..."
+	docker load -i "${RESULT_NOUPX_IMAGE}"
+	@echo "--- Image Info (${REPO_PREFIX}/${NOUPX_IMAGE_NAME}:latest) ---"
+	@docker images "${REPO_PREFIX}/${NOUPX_IMAGE_NAME}:latest"
+	@echo "Number of layers: $$(docker history --no-trunc --format "{{.ID}}" "${REPO_PREFIX}/${NOUPX_IMAGE_NAME}:latest" | wc -l)"
+
+load-image-scratch-upx: ${RESULT_UPX_IMAGE}
+	@echo "--> Loading and getting info for UPX image (${REPO_PREFIX}/${UPX_IMAGE_NAME}:latest)..."
+	docker load -i "${RESULT_UPX_IMAGE}"
+	@echo "--- Image Info (${UPX_IMAGE_NAME}:latest) ---"
+	@docker images "${UPX_IMAGE_NAME}:latest"
+	@echo "Number of layers: $$(docker history --no-trunc --format "{{.ID}}" "${UPX_IMAGE_NAME}:latest" | wc -l)"
+
+load-all: load-image-scratch-noupx load-image-scratch-upx
+
+build-load-all: load-all
+	@echo "--> Both images built and loaded into local Docker daemon"
+
+# --- Docker Hub Push Targets ---
+push-image-scratch-noupx: ${RESULT_NOUPX_IMAGE}
+	@echo "--> Tagging and Pushing non-UPX image to Docker Hub (${REPO_PREFIX}/${NOUPX_IMAGE_NAME}:${VERSION})..."
+	docker tag "${REPO_PREFIX}/${NOUPX_IMAGE_NAME}:latest" "${REPO_PREFIX}/${NOUPX_IMAGE_NAME}:${VERSION}"
+	docker tag "${REPO_PREFIX}/${NOUPX_IMAGE_NAME}:latest" "${REPO_PREFIX}/${NOUPX_IMAGE_NAME}:latest"
+	docker push "${REPO_PREFIX}/${NOUPX_IMAGE_NAME}:${VERSION}"
+	docker push "${REPO_PREFIX}/${NOUPX_IMAGE_NAME}:latest"
+	@echo "--> Pushed ${REPO_PREFIX}/${NOUPX_IMAGE_NAME}:${VERSION} and :latest"
+
+push-image-scratch-upx: ${RESULT_UPX_IMAGE}
+	@echo "--> Tagging and Pushing UPX image to Docker Hub (${REPO_PREFIX}/${UPX_IMAGE_NAME}:${VERSION})..."
+	docker tag "${REPO_PREFIX}/${UPX_IMAGE_NAME}:latest" "${REPO_PREFIX}/${UPX_IMAGE_NAME}:${VERSION}"
+	docker tag "${REPO_PREFIX}/${UPX_IMAGE_NAME}:latest" "${REPO_PREFIX}/${UPX_IMAGE_NAME}:latest"
+	docker push "${REPO_PREFIX}/${UPX_IMAGE_NAME}:${VERSION}"
+	docker push "${REPO_PREFIX}/${UPX_IMAGE_NAME}:latest"
+	@echo "--> Pushed ${REPO_PREFIX}/${UPX_IMAGE_NAME}:${VERSION} and :latest"
+
+push-all: push-image-scratch-noupx push-image-scratch-upx
+
+# --- Clean Target ---
+clean:
+	@echo "--> Cleaning Nix build results..."
+	rm -f result-*
+
+# --- nix flake stuff ---
+update:
+	nix flake update
+
+build:
+	nix flake build
+
+# end
