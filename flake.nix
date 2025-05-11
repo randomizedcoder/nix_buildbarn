@@ -90,8 +90,7 @@
           cp ${./VERSION} $out/VERSION
         '';
 
-        # Helper function to build layered images
-        buildImage = { name, tag ? "latest", baseImage ? null, binaryPkg, extraContents ? [] }:
+        buildImage = { name, tag ? "latest", baseImage ? null, binaryPkg, extraContents ? [], extraCommands ? "" }:
           pkgs.dockerTools.buildLayeredImage {
             inherit name tag;
             fromImage = baseImage;
@@ -102,6 +101,7 @@
               ExposedPorts = { "9980/tcp" = {}; };
               Cmd = [ "${binaryPkg}/bin/bbRunner" ];
             };
+            extraCommands = extraCommands;
           };
 
         # --- Image Derivations
@@ -118,6 +118,95 @@
           binaryPkg = bbRunnerUpx;
         };
 
+        # Scratch + bbRunner + NoUPX + DevTools
+        imageNixScratchbbRunnerNoupxDev = buildImage {
+          name = "randomizedcoder/nix-bbRunner-noupx-dev";
+          binaryPkg = bbRunner;
+          extraContents = [ devTools ];
+        };
+
+        # Scratch + bbRunner + UPX + DevTools
+        imageNixScratchbbRunnerUpxDev = buildImage {
+          name = "randomizedcoder/nix-bbRunner-upx-dev";
+          binaryPkg = bbRunnerUpx;
+          extraContents = [ devTools ];
+        };
+
+        # Filtered development tools package (just use devTools)
+        filteredDevTools = devTools;
+
+        # Scratch + bbRunner + NoUPX + FilteredDevTools with pruning via extraCommands
+        imageNixScratchbbRunnerNoupxFilteredDev = buildImage {
+          name = "randomizedcoder/nix-bbRunner-noupx-filtered-dev";
+          binaryPkg = bbRunner;
+          extraContents = [ devTools ];
+          extraCommands = ''
+            rm -rf share/locale
+            rm -rf share/doc
+            rm -rf share/man
+            rm -rf share/info
+            rm -rf share/gtk-doc
+            rm -rf share/terminfo
+            rm -rf share/tabset
+            rm -rf share/zoneinfo
+            rm -rf share/emacs
+            rm -rf share/bash-completion
+            rm -rf share/zsh
+            rm -rf share/fish
+            rm -rf share/vim
+            rm -rf share/nano
+            rm -rf share/readline
+          '';
+        };
+
+        # Development tools package
+        devTools = pkgs.buildEnv {
+          name = "dev-tools";
+          paths = with pkgs; [
+            # Basic build tools
+            bash
+            gnumake
+            automake
+            libtool
+            pkg-config
+            ninja
+
+            # Compression tools (needed for Go module downloads and C/C++ builds)
+            gzip
+            bzip2
+            xz
+            zstd
+
+            # Binary packer (for Go binaries)
+            upx
+
+            # LLVM/Clang toolchain (needed for race detection and C/C++ builds)
+            llvmPackages_19.libcxxClang
+            llvmPackages_19.lld
+            llvmPackages_19.libcxx.dev
+
+            # Essential development libraries (minimal headers)
+            glibc.dev
+            stdenv.cc.cc.lib
+            zlib.dev
+            openssl.dev
+            ncurses.dev
+
+            # Build system generators (needed for C/C++ projects)
+            flex
+            bison
+
+            # Go tools with race detection support
+            go
+            golint
+            golangci-lint
+
+            # Version control
+            git
+          ];
+          extraOutputsToInstall = [ "out" ];
+        };
+
       in
       {
         packages = {
@@ -128,6 +217,9 @@
           # Images
           image-nix-scratch-bbRunner-noupx = imageNixScratchbbRunnerNoupx;
           image-nix-scratch-bbRunner-upx = imageNixScratchbbRunnerUpx;
+          image-nix-scratch-bbRunner-noupx-dev = imageNixScratchbbRunnerNoupxDev;
+          image-nix-scratch-bbRunner-upx-dev = imageNixScratchbbRunnerUpxDev;
+          image-nix-scratch-bbRunner-noupx-filtered-dev = imageNixScratchbbRunnerNoupxFilteredDev;
 
           # Default package for `nix build`
           default = self.packages.${system}.image-nix-scratch-bbRunner-noupx;
@@ -142,9 +234,10 @@
           };
 
           # Apps to output image tarballs (useful for loading into Docker)
-          # Update keys to match package names
           image-scratch-bbRunner-noupx-tarball = flake-utils.lib.mkApp { drv = self.packages.${system}.image-nix-scratch-bbRunner-noupx; };
           image-scratch-bbRunner-upx-tarball = flake-utils.lib.mkApp { drv = self.packages.${system}.image-nix-scratch-bbRunner-upx; };
+          image-scratch-bbRunner-noupx-dev-tarball = flake-utils.lib.mkApp { drv = self.packages.${system}.image-nix-scratch-bbRunner-noupx-dev; };
+          image-scratch-bbRunner-upx-dev-tarball = flake-utils.lib.mkApp { drv = self.packages.${system}.image-nix-scratch-bbRunner-upx-dev; };
         };
 
         # --- Dev Shell ---
@@ -178,7 +271,7 @@
           ];
           shellHook = ''
             export PS1='(nix-dev) \w\$ '
-            echo "Entered Nix development shell for go-nix-simple."
+            echo "Entered Nix development shell for nix_buildbarn."
           '';
 
           # You might have other shell attributes here
