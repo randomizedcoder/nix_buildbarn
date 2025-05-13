@@ -1,4 +1,6 @@
-version: '3'
+#
+# nix_buildbarn/docker-compose/docker-compose.yml
+#
 services:
   frontend:
     image: ghcr.io/buildbarn/bb-storage:20250213T085125Z-2600f22
@@ -84,11 +86,7 @@ services:
         propagation: shared
 
   runner-fuse-ubuntu22-04:
-    image: ghcr.io/catthehacker/ubuntu:act-22.04@sha256:5f9c35c25db1d51a8ddaae5c0ba8d3c163c5e9a4a6cc97acd409ac7eae239448
-    command:
-    - sh
-    - -c
-    - while ! test -f /bb/installed; do sleep 1; done; exec /bb/tini -v -- /bb/bb_runner /config/runner-ubuntu22-04.jsonnet
+    image: randomizedcoder/nix-bbrunner-noupx-dev
     network_mode: none
     volumes:
     - ./config:/config
@@ -99,30 +97,39 @@ services:
       bind:
         # HostToContainer mount to use the FUSE mount.
         propagation: slave
+    # - type: tmpfs
+    #   target: /tmp
+    #   tmpfs:
+    #     size: 1G
+    #     mode: 1777
+    #     nosuid: true
+    #     nodev: true
+    #command: /bb/bb_runner /config/runner.jsonnet
     depends_on:
     - runner-installer
 
-  # For situations where the more efficient FUSE worker is not supported,
-  # the classic hardlinking example is shown here.
-  worker-hardlinking-ubuntu22-04:
-    image: ghcr.io/buildbarn/bb-worker:20250201T092335Z-31d23d1
-    command:
-    - /config/worker-hardlinking-ubuntu22-04.jsonnet
-    privileged: false
-    volumes:
-    - ./config:/config
-    - ./volumes/worker-hardlinking-ubuntu22-04:/worker
+# removing hardlinking example
+  # # For situations where the more efficient FUSE worker is not supported,
+  # # the classic hardlinking example is shown here.
+  # worker-hardlinking-ubuntu22-04:
+  #   image: ghcr.io/buildbarn/bb-worker:20250201T092335Z-31d23d1
+  #   command:
+  #   - /config/worker-hardlinking-ubuntu22-04.jsonnet
+  #   privileged: false
+  #   volumes:
+  #   - ./config:/config
+  #   - ./volumes/worker-hardlinking-ubuntu22-04:/worker
 
-  runner-hardlinking-ubuntu22-04:
-    image: ghcr.io/catthehacker/ubuntu:act-22.04@sha256:5f9c35c25db1d51a8ddaae5c0ba8d3c163c5e9a4a6cc97acd409ac7eae239448
-    command:
-    - sh
-    - -c
-    - while ! test -f /bb/installed; do sleep 1; done; exec /bb/tini -v -- /bb/bb_runner /config/runner-ubuntu22-04.jsonnet
-    network_mode: none
-    volumes:
-    - ./config:/config
-    - ./volumes/bb:/bb
-    - ./volumes/worker-hardlinking-ubuntu22-04:/worker
-    depends_on:
-    - runner-installer
+  # runner-hardlinking-ubuntu22-04:
+  #   image: ghcr.io/catthehacker/ubuntu:act-22.04@sha256:5f9c35c25db1d51a8ddaae5c0ba8d3c163c5e9a4a6cc97acd409ac7eae239448
+  #   command:
+  #   - sh
+  #   - -c
+  #   - while ! test -f /bb/installed; do sleep 1; done; exec /bb/tini -v -- /bb/bb_runner /config/runner-ubuntu22-04.jsonnet
+  #   network_mode: none
+  #   volumes:
+  #   - ./config:/config
+  #   - ./volumes/bb:/bb
+  #   - ./volumes/worker-hardlinking-ubuntu22-04:/worker
+  #   depends_on:
+  #   - runner-installer

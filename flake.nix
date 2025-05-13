@@ -62,27 +62,130 @@
           enableCgo = false;
         };
 
+        # Wrap the non-UPX binary to put it in the correct location
+        bbRunnerWrapped = pkgs.runCommand "bbRunnerWrapped" {
+          src = bbRunner;
+        } ''
+          mkdir -p $out/bb
+          cp $src/bin/bb_runner $out/bb/bb_runner
+          chmod +x $out/bb/bb_runner
+        '';
+
         # --- UPX Packed Binary Derivations ---
 
         bbRunnerUpx = pkgs.runCommand "bbRunnerUpx" {
           nativeBuildInputs = [ pkgs.upx ];
           src = bbRunner;
         } ''
-          mkdir -p $out/bin
+          mkdir -p $out/bb
           # The binary name comes from the subPackages entry 'cmd/bb_runner'
           local input_binary_name="bb_runner"
-          local output_binary_name="bbRunner"
+          local output_binary_name="bb_runner"
           local orig_bin="$src/bin/$input_binary_name"
           echo "Original size ($(basename $orig_bin)): $(ls -lh $orig_bin | awk '{print $5}')"
-          upx --best --lzma -o "$out/bin/$output_binary_name" "$orig_bin"
-          echo "Compressed size ($(basename $out/bin/$output_binary_name)): $(ls -lh $out/bin/$output_binary_name | awk '{print $5}')"
-          chmod +x "$out/bin/$output_binary_name"
+          upx --best --lzma -o "$out/bb/$output_binary_name" "$orig_bin"
+          echo "Compressed size ($(basename $out/bb/$output_binary_name)): $(ls -lh $out/bb/$output_binary_name | awk '{print $5}')"
+          chmod +x "$out/bb/$output_binary_name"
         '';
 
         etcFiles = pkgs.runCommand "etc-files" {} ''
           mkdir -p $out/etc
           echo 'nogroup:x:65534:' > $out/etc/group
-          echo 'nobody:x:65534:65534:Nobody:/:/sbin/nologin' > $out/etc/passwd
+          echo 'nobody:x:65534:65534:Nobody:/home/nobody:/bin/bash' > $out/etc/passwd
+
+          # Create home directory and .bashrc
+          mkdir -p $out/home/nobody
+          cat > $out/home/nobody/.bashrc << 'EOF'
+          # Set PATH to include /bin
+          export PATH="/bin:/usr/bin:$PATH"
+          EOF
+          chmod 644 $out/home/nobody/.bashrc
+
+          # Create bash wrapper
+          cat > $out/home/nobody/bash.wrapper << 'EOF'
+          #!/bin/bash
+          export PATH="/bin:/usr/bin:$PATH"
+          exec /bin/bash "$@"
+          EOF
+          chmod +x $out/home/nobody/bash.wrapper
+        '';
+
+        workerDirs = pkgs.runCommand "worker-dirs" {} ''
+          mkdir -p $out/worker/runner
+          chmod -R 755 $out/worker
+        '';
+
+        # Remove worker configuration protobuf:
+        # https://github.com/buildbarn/bb-remote-execution/blob/master/pkg/proto/configuration/bb_runner/bb_runner.proto
+        runnerConfig = pkgs.runCommand "runner-config" {} ''
+          mkdir -p $out/config
+          cat > $out/config/common.libsonnet << 'EOF'
+          {
+            blobstore: {
+              contentAddressableStorage: {
+                sharding: {
+                  hashInitialization: 11946695773637837490,
+                  shards: [
+                    {
+                      backend: { grpc: { address: 'storage-0:8981' } },
+                      weight: 1,
+                    },
+                    {
+                      backend: { grpc: { address: 'storage-1:8981' } },
+                      weight: 1,
+                    },
+                  ],
+                },
+              },
+              actionCache: {
+                completenessChecking: {
+                  backend: {
+                    sharding: {
+                      hashInitialization: 14897363947481274433,
+                      shards: [
+                        {
+                          backend: { grpc: { address: 'storage-0:8981' } },
+                          weight: 1,
+                        },
+                        {
+                          backend: { grpc: { address: 'storage-1:8981' } },
+                          weight: 1,
+                        },
+                      ],
+                    },
+                  },
+                  maximumTotalTreeSizeBytes: 64 * 1024 * 1024,
+                },
+              },
+            },
+            browserUrl: 'http://localhost:7984',
+            maximumMessageSizeBytes: 2 * 1024 * 1024,
+            global: {
+              diagnosticsHttpServer: {
+                httpServers: [{
+                  listenAddresses: [':80'],
+                  authenticationPolicy: { allow: {} },
+                }],
+                enablePrometheus: true,
+                enablePprof: true,
+                enableActiveSpans: true,
+              },
+            },
+          }
+          EOF
+
+          cat > $out/config/runner.jsonnet << 'EOF'
+          local common = import 'common.libsonnet';
+
+          {
+            buildDirectoryPath: '/worker/build',
+            global: common.global,
+            grpcServers: [{
+              listenPaths: ['/worker/runner'],
+              authenticationPolicy: { allow: {} },
+            }],
+          }
+          EOF
         '';
 
         versionFilePkg = pkgs.runCommand "version-file" {} ''
@@ -94,14 +197,30 @@
           pkgs.dockerTools.buildLayeredImage {
             inherit name tag;
             fromImage = baseImage;
-            contents = [ binaryPkg versionFilePkg etcFiles ] ++ extraContents;
+            contents = [
+              binaryPkg
+              versionFilePkg
+              etcFiles
+              runnerConfig
+              pkgs.tini
+              pkgs.coreutils
+              pkgs.bash
+              pkgs.gnugrep
+            ] ++ extraContents;
             config = {
               User = "nobody";
               WorkingDir = "/";
               ExposedPorts = { "9980/tcp" = {}; };
-              Cmd = [ "${binaryPkg}/bin/bbRunner" ];
+              Entrypoint = [ "${pkgs.tini}/bin/tini" "-s" "-v" "--" ];
+              Cmd = [ "/bb/bb_runner" "/config/runner.jsonnet" ];
+              Env = [ "PATH=/bin:/usr/bin" ];
             };
-            extraCommands = extraCommands;
+            extraCommands = ''
+              mkdir -p tmp
+              chmod 1777 tmp
+              mkdir -p worker/runner
+              chmod -R 755 worker
+            '';
           };
 
         # --- Image Derivations
@@ -109,7 +228,7 @@
         # Scratch + bbRunner + NoUPX
         imageNixScratchbbRunnerNoupx = buildImage {
           name = "randomizedcoder/nix-bbRunner-noupx";
-          binaryPkg = bbRunner;
+          binaryPkg = bbRunnerWrapped;
         };
 
         # Scratch + bbRunner + UPX
@@ -121,7 +240,7 @@
         # Scratch + bbRunner + NoUPX + DevTools
         imageNixScratchbbRunnerNoupxDev = buildImage {
           name = "randomizedcoder/nix-bbRunner-noupx-dev";
-          binaryPkg = bbRunner;
+          binaryPkg = bbRunnerWrapped;
           extraContents = [ devTools ];
         };
 
@@ -138,7 +257,7 @@
         # Scratch + bbRunner + NoUPX + FilteredDevTools with pruning via extraCommands
         imageNixScratchbbRunnerNoupxFilteredDev = buildImage {
           name = "randomizedcoder/nix-bbRunner-noupx-filtered-dev";
-          binaryPkg = bbRunner;
+          binaryPkg = bbRunnerWrapped;
           extraContents = [ devTools ];
           extraCommands = ''
             rm -rf share/locale
@@ -160,11 +279,16 @@
         };
 
         # Development tools package
+        # Looks like the bb-deployments uses this image:
+        # https://github.com/catthehacker/docker_images/blob/master/linux/ubuntu/scripts/act.sh#L46
+        # https://github.com/buildbarn/bb-deployments/blob/master/docker-compose/docker-compose.yml#L86
         devTools = pkgs.buildEnv {
           name = "dev-tools";
           paths = with pkgs; [
+
             # Basic build tools
-            bash
+            #coreutils
+            #bash
             gnumake
             automake
             libtool
@@ -176,6 +300,8 @@
             bzip2
             xz
             zstd
+            zip
+            unzip
 
             # Binary packer (for Go binaries)
             upx
@@ -191,6 +317,7 @@
             zlib.dev
             openssl.dev
             ncurses.dev
+            libyaml.dev
 
             # Build system generators (needed for C/C++ projects)
             flex
@@ -203,6 +330,12 @@
 
             # Version control
             git
+
+            # Additional tools from reference container
+            gawk
+            curl
+            jq
+            wget
           ];
           extraOutputsToInstall = [ "out" ];
         };
@@ -211,7 +344,7 @@
       {
         packages = {
           # Binaries
-          binary-bbRunner-noupx = bbRunner;
+          binary-bbRunner-noupx = bbRunnerWrapped;
           binary-bbRunner-upx = bbRunnerUpx;
 
           # Images
